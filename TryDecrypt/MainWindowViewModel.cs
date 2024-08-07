@@ -9,6 +9,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using InTheHand.Net.Sockets;
+using InTheHand.Net.Bluetooth;
 
 namespace TryDecrypt
 {
@@ -55,33 +57,24 @@ namespace TryDecrypt
             CCodeInputed = new RelayCommand(obj => codeInputed());
 
             readSavedFile();
-            for (int i = 0; i < doneList.Length; i++) 
-                if (!doneList[i])
-                {
-                    EncryptText = encryptionData[i];
-                    break;
-                }
+            currentData = new Random().Next(0, 4);
+            EncryptText = encryptionData[currentData];
 
             readImage();
 
-            /*
-            PixelFormat pf = PixelFormats.Bgr32;
-            int width = 10;
-            int height = 10;
-            int rawStride = (width * pf.BitsPerPixel + 7) / 8;
-
-            Random value = new Random();
-            for (int i = 0; i < 10; i++)
-            {
-                value.NextBytes(rawImage);
-                Thread.Sleep(500);
-                bitmap2.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, new Action(() => {
-                    bitmap2.WritePixels(new Int32Rect(0, 0, 10, 10), rawImage, rawStride, 0);
-                }));
-            }*/
+            bluetoothSetup();
         }
 
-        // ============================ model processes ============================ 
+        // ============================ Setup ============================ 
+
+        private void bluetoothSetup()
+        {
+            BluetoothClient bc = new BluetoothClient();
+            BluetoothListener li = new BluetoothListener(BluetoothService.SerialPort);
+            li.Start();
+
+            new Thread((obj)=>send_controler((BluetoothListener)obj)).Start(li);
+        }
 
         private void readImage()
         {
@@ -111,13 +104,16 @@ namespace TryDecrypt
                 f.Close();
 
                 for (int i = 0; i < 5; i++)
-                    doneList[i] = (data[i].CompareTo("true") == 0);
+                    doneList[i] = (data[i].CompareTo("True") == 0);
                 doneCount = int.Parse(data[5]);
-            } 
+                for (int i = 0; i < 5; i++)
+                    names[i] = data[6+i];
+            }
             catch
             {
                 for (int i = 0; i < doneList.Length; i++)
                     doneList[i] = false;
+                doneCount = 0;
             }
         }
 
@@ -126,9 +122,11 @@ namespace TryDecrypt
             string data = "";
             for (int i = 0; i < doneList.Length; i++)
                 data = data + doneList[i] + "/";
-            data = data + doneCount;
+            data = data + doneCount; 
+            for (int i = 0; i < names.Length; i++)
+                data = data + "/" + names[i];
 
-            System.IO.FileStream f = new System.IO.FileStream(".\\data", System.IO.FileMode.CreateNew);
+            System.IO.FileStream f = new System.IO.FileStream(".\\data", System.IO.FileMode.Create);
             System.IO.StreamWriter w = new System.IO.StreamWriter(f);
 
             w.Write(data);
@@ -136,6 +134,66 @@ namespace TryDecrypt
             w.Close();
             f.Close();
         }
+
+        // ================================ BlueTooth Threading ==================================
+
+        Mutex bluetoothMutex = new Mutex();
+
+        Stack<string> sendTexts = new Stack<string>();
+
+        private void addMessage(string s)
+        {
+            bluetoothMutex.WaitOne();
+            sendTexts.Push(s + "\n");
+            bluetoothMutex.ReleaseMutex();
+        }
+
+        byte[] buf = new byte[1000];
+        private void receiver(System.Net.Sockets.Socket client)
+        {
+            int cnt;
+            while (true)
+            {
+                cnt = client.Receive(buf);
+                if (cnt == 0)
+                    break;
+
+                string msg = Encoding.UTF8.GetString(buf, 0, cnt);
+                if (msg[0] == 'o')
+                    Console.WriteLine("rec");
+                if (msg[0] == 'n')
+                    name = msg.Substring(2);
+            }
+        }
+
+        private void send_controler(BluetoothListener li)
+        {
+            while (true)
+            {
+                BluetoothClient cl = li.AcceptBluetoothClient();
+                new Thread(obj => receiver((System.Net.Sockets.Socket)obj)).Start(cl.Client);
+
+                while (true)
+                {
+                    bluetoothMutex.WaitOne();
+                    if (sendTexts.Count != 0)
+                    {
+                        try
+                        {
+                            cl.Client.Send(Encoding.UTF8.GetBytes(sendTexts.Peek()));
+                            sendTexts.Pop();
+                        }
+                        catch
+                        {
+
+                        }
+                    }
+                    bluetoothMutex.ReleaseMutex();
+                }
+            }
+        }
+
+        // ===========================================================================
 
         private string[] codeList =
         {
@@ -145,6 +203,8 @@ namespace TryDecrypt
             "C3FE3E",
             "57AE7B"
         };
+
+        private int currentData = 0;
 
         private string[] encryptionData =
         {
@@ -174,6 +234,10 @@ namespace TryDecrypt
             false,
             false
         };
+
+        private string[] names = new string[5];
+
+        // ======================= Animation Controler ======================= 
 
         private void doFailAnimation()
         {
@@ -207,6 +271,8 @@ namespace TryDecrypt
             OnPropertyChanged(nameof(doSolvedAni)));
         }
 
+        // ======================= Model Logic ======================= 
+
         private void codeInputed()
         {
             AllowInput = false;
@@ -224,9 +290,11 @@ namespace TryDecrypt
             new Thread(obj => failProcessor()).Start();
         }
 
+        string name = null;
+
         private void successProcessor(int i)
         {
-            int originlen = encryptionData[i].Length;
+            int originlen = encryptionData[currentData].Length;
             int declen = decryptedData[i].Length;
             double donePercent;
 
@@ -234,12 +302,14 @@ namespace TryDecrypt
             if (doneList[i])
             {
                 // 중복 성공
+                addMessage("● 중복 성공");
                 imageArray = image2;
                 doSolvedAnimation();
             }
             else
             {
                 // 미중복 성공
+                addMessage("● 성공!!!");
                 imageArray = image1;
                 doSuccsessAnimation();
             }
@@ -249,7 +319,7 @@ namespace TryDecrypt
                 donePercent = (double)idx / (100 * 2 - 1);
                 EncryptText =
                     decryptedData[i].Substring(0, (int)(donePercent * declen))
-                    + encryptionData[i].Substring((int)(donePercent * originlen), originlen - (int)(donePercent * originlen));
+                    + encryptionData[currentData].Substring((int)(donePercent * originlen), originlen - (int)(donePercent * originlen));
                 OnPropertyChanged(nameof(EncryptText));
 
                 ViewImage.Dispatcher.Invoke(
@@ -263,16 +333,43 @@ namespace TryDecrypt
             {
                 // 중복 성공
                 Thread.Sleep(1000);
-
-                // 복귀 처리
             }
             else
             {
                 // 미중복 성공
                 // 등록 처리
+                addMessage("   말씀 : " + decryptedData[i]);
+                name = null;
+                addMessage("   이름을 등록해주세요 : n 이름");
+                while (name == null) ;
+                // 이름과 현황 저장
+
+                name = null;
 
                 // 복귀 처리
                 closeSuccessAnimation();
+            }
+
+            // 복귀 처리
+            byte[] a = new byte[4 * 50];
+            Random value = new Random();
+            currentData = value.Next(0, 4);
+            originlen = encryptionData[currentData].Length;
+
+            for (int idx = 0; idx < 100 * 2; idx++)
+            {
+                donePercent = (double)idx / (100 * 2 - 1);
+                EncryptText =
+                    encryptionData[currentData].Substring(0, (int)(donePercent * originlen))
+                    + decryptedData[i].Substring((int)(donePercent * declen), declen - (int)(donePercent * declen));
+                OnPropertyChanged(nameof(EncryptText));
+
+                value.NextBytes(a);
+                ViewImage.Dispatcher.Invoke(
+                    new Action(() => ViewImage.WritePixels(new Int32Rect(idx % 2 * 50, idx / 2, 50, 1), a, 4 * 50, 0))
+                    );
+
+                Thread.Sleep(10);
             }
 
             doneList[i] = true;
@@ -283,6 +380,8 @@ namespace TryDecrypt
         private void failProcessor()
         {
             doFailAnimation();
+
+            addMessage("● 실패!");
 
             byte[] a = new byte[4 * 50];
             Random value = new Random();
