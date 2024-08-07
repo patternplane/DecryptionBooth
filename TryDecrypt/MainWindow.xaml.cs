@@ -35,5 +35,15 @@ namespace TryDecrypt
             if (e.Key == Key.Enter)
                 ((ICommand)getBindedProperty("CCodeInputed")).Execute(null);
         }
+
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            Application.Current.Shutdown();
+        }
+
+        private void TextBox_IsEnabledChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            ((TextBox)sender).Focus();
+        }
     }
 }

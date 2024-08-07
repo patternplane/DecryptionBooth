@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using InTheHand.Net.Sockets;
 using InTheHand.Net.Bluetooth;
+using System.ComponentModel;
 
 namespace TryDecrypt
 {
@@ -30,10 +31,13 @@ namespace TryDecrypt
         public bool doFailureAni { get; set; } = false;
         public bool doSuccessAni { get; set; } = false;
         public bool doSolvedAni { get; set; } = false;
+        public bool doCancelAni { get; set; } = false;
 
         public string EncryptText { get; private set; }
 
         public bool AllowInput { get; set; } = true;
+
+        public BindingList<string> SeccessesNames { get; set; } = new BindingList<string>();
 
         private Dispatcher dispatcher;
 
@@ -105,15 +109,15 @@ namespace TryDecrypt
 
                 for (int i = 0; i < 5; i++)
                     doneList[i] = (data[i].CompareTo("True") == 0);
-                doneCount = int.Parse(data[5]);
                 for (int i = 0; i < 5; i++)
-                    names[i] = data[6+i];
+                    SeccessesNames.Add(data[5+i]);
             }
             catch
             {
                 for (int i = 0; i < doneList.Length; i++)
                     doneList[i] = false;
-                doneCount = 0;
+                for (int i = 0; i < 5; i++)
+                    SeccessesNames.Add("");
             }
         }
 
@@ -122,12 +126,19 @@ namespace TryDecrypt
             string data = "";
             for (int i = 0; i < doneList.Length; i++)
                 data = data + doneList[i] + "/";
-            data = data + doneCount; 
-            for (int i = 0; i < names.Length; i++)
-                data = data + "/" + names[i];
+            for (int i = 0; i < SeccessesNames.Count; i++)
+                data = data + SeccessesNames[i] + "/";
 
             System.IO.FileStream f = new System.IO.FileStream(".\\data", System.IO.FileMode.Create);
             System.IO.StreamWriter w = new System.IO.StreamWriter(f);
+
+            w.Write(data);
+
+            w.Close();
+            f.Close();
+
+            f = new System.IO.FileStream(".\\data_"+ (DateTime.UtcNow.Ticks / 10000000), System.IO.FileMode.Create);
+            w = new System.IO.StreamWriter(f);
 
             w.Write(data);
 
@@ -162,19 +173,76 @@ namespace TryDecrypt
                 if (msg[0] == 'o')
                     Console.WriteLine("rec");
                 if (msg[0] == 'n')
-                    name = msg.Substring(2);
+                {
+                    try
+                    {
+                        name = msg.Substring(2).Trim();
+                    }
+                    catch
+                    {
+                        denied = true;
+                    }
+                }
+                if (msg[0] == 'd')
+                    denied = true;
+                if (msg[0] == 's')
+                {
+                    if (msg.Length > 1 && msg[1] == 'a')
+                    {
+                        writeDataToFile();
+                    }
+                    else
+                    {
+                        string ms = "";
+                        for (int i = 0; i < 5; i++)
+                            ms += (i + 1) + " : " + SeccessesNames[i] + "\n";
+                        addMessage(ms);
+                    }
+                }
+                if (msg[0] == 'r')
+                {
+                    if (msg.Length > 1 && msg[1] == 'a')
+                    {
+                        for (int i = 0; i < 5; i++)
+                        {
+                            dispatcher.Invoke(()=>
+                            SeccessesNames[i] = "");
+                            doneList[i] = false;
+                        }
+                    }
+                    else
+                    {
+                        int del = -1;
+                        try { del = msg[2] - '0' - 1; } catch { }
+                        if (del >= 0 && del <= 4)
+                        {
+                            dispatcher.Invoke(() =>
+                            SeccessesNames[del] = "");
+                            doneList[del] = false;
+                        }
+                    }
+                }
             }
+            recEnded = true;
         }
+
+        bool recEnded = false;
 
         private void send_controler(BluetoothListener li)
         {
             while (true)
             {
                 BluetoothClient cl = li.AcceptBluetoothClient();
+                recEnded = false;
                 new Thread(obj => receiver((System.Net.Sockets.Socket)obj)).Start(cl.Client);
+
+                cl.Client.Send(Encoding.UTF8.GetBytes("=========================\ns : 상태보기\nr 숫자 : n번째 지우기\nra : 모두 지우기\nsa : 저장하기\n=========================\n"));
 
                 while (true)
                 {
+                    if (recEnded)
+                        break;
+
                     bluetoothMutex.WaitOne();
                     if (sendTexts.Count != 0)
                     {
@@ -224,8 +292,6 @@ namespace TryDecrypt
             "사랑은 허다한 죄를 덮느니라"
         };
 
-        private int doneCount = 0;
-
         private bool[] doneList =
         {
             false,
@@ -234,8 +300,6 @@ namespace TryDecrypt
             false,
             false
         };
-
-        private string[] names = new string[5];
 
         // ======================= Animation Controler ======================= 
 
@@ -247,6 +311,16 @@ namespace TryDecrypt
             doFailureAni = false;
             dispatcher.Invoke(() =>
             OnPropertyChanged(nameof(doFailureAni)));
+        }
+
+        private void doCancelAnimation()
+        {
+            doCancelAni = true;
+            dispatcher.Invoke(() =>
+            OnPropertyChanged(nameof(doCancelAni)));
+            doCancelAni = false;
+            dispatcher.Invoke(() =>
+            OnPropertyChanged(nameof(doCancelAni)));
         }
 
         private void doSuccsessAnimation()
@@ -290,6 +364,7 @@ namespace TryDecrypt
             new Thread(obj => failProcessor()).Start();
         }
 
+        bool denied = false;
         string name = null;
 
         private void successProcessor(int i)
@@ -340,11 +415,26 @@ namespace TryDecrypt
                 // 등록 처리
                 addMessage("   말씀 : " + decryptedData[i]);
                 name = null;
-                addMessage("   이름을 등록해주세요 : n 이름");
-                while (name == null) ;
-                // 이름과 현황 저장
+                denied = false;
+                addMessage("   이름을 등록해주세요 : n 이름 / d");
+                while (name == null && !denied) ;
+                if (denied)
+                {
+                    // 거부 처리
+                    CodeText = "";
+                    dispatcher.Invoke(()=>
+                    OnPropertyChanged(nameof(CodeText)));
+                    doCancelAnimation();
 
-                name = null;
+                    Thread.Sleep(500);
+                }
+                else
+                {
+                    // 이름과 현황 저장
+                    dispatcher.Invoke(() => { SeccessesNames.Insert(i, name); SeccessesNames.RemoveAt(i + 1); });
+                    writeDataToFile();
+                    doneList[i] = true;
+                }
 
                 // 복귀 처리
                 closeSuccessAnimation();
@@ -372,7 +462,6 @@ namespace TryDecrypt
                 Thread.Sleep(10);
             }
 
-            doneList[i] = true;
             AllowInput = true;
             OnPropertyChanged(nameof(AllowInput));
         }

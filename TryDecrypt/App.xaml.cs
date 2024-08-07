@@ -24,11 +24,13 @@ namespace TryDecrypt
         private void Application_Exit(object sender, ExitEventArgs e)
         {
             vm.writeDataToFile();
+            Environment.Exit(0);
         }
 
         private void Application_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
         {
             vm.writeDataToFile();
+            Environment.Exit(0);
         }
     }
 }
